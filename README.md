@@ -64,3 +64,8 @@ agent/
 - `GET /`
 - `GET /health`
 - `POST /api/v1/chat`
+
+## 문서
+
+- API 명세: [`docs/spec.md`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/docs/spec.md)
+- Tool 상세: [`docs/tools.md`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/docs/tools.md)
