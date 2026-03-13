@@ -1,14 +1,14 @@
 # Agent Tool Guide
 
-현재 에이전트는 LangGraph 스타일의 tool-calling 흐름으로 동작하며, 실제 도구 정의는 [`app/agents/search_agent.py`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/agents/search_agent.py)에 있습니다.
+현재 에이전트는 LangChain tool-calling 흐름으로 동작하며, 실제 도구 정의는 [`app/tools/medical_tools.py`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/tools/medical_tools.py)에 있습니다.
 
 ## 전체 흐름
 
 1. 사용자가 `/api/v1/chat`으로 질문을 보냅니다.
 2. [`AgentService`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/services/agent_service.py)가 [`Agent`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/agents/search_agent.py)를 생성합니다.
-3. 에이전트는 시스템 프롬프트를 바탕으로 어떤 tool을 쓸지 결정합니다.
+3. 에이전트는 시스템 프롬프트를 바탕으로 어떤 tool을 쓸지 LLM이 결정합니다.
 4. 선택된 tool이 [`ElasticsearchService`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/services/elasticsearch_service.py)를 호출하거나 사용자 질문을 구조화합니다.
-5. tool 결과를 다시 최종 프롬프트에 넣고 답변을 생성합니다.
+5. tool 결과는 `ToolMessage`로 다시 LLM에 전달됩니다.
 6. 최종 응답은 `ChatResponse` 형식으로 스트리밍됩니다.
 
 ## Tool List
@@ -16,7 +16,7 @@
 ### 1. `medical_search`
 
 - 목적: 일반 의학 정보, 질환 설명, 진단/치료 관련 질문에 대해 `edu-collection` 인덱스에서 본문 검색을 수행합니다.
-- 구현 위치: [`search_agent.py`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/agents/search_agent.py)
+- 구현 위치: [`medical_tools.py`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/tools/medical_tools.py)
 - 실제 조회 서비스: [`elasticsearch_service.py`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/services/elasticsearch_service.py)
 
 #### 입력
@@ -55,7 +55,7 @@ content: ...
 ### 2. `hospital_search`
 
 - 목적: 질문에 지역성 표현이 들어오면 같은 `edu-collection` 인덱스에서 병원/위치 관련 문맥을 보강해서 찾습니다.
-- 구현 위치: [`search_agent.py`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/agents/search_agent.py)
+- 구현 위치: [`medical_tools.py`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/tools/medical_tools.py)
 
 #### 입력
 
@@ -82,18 +82,6 @@ creation_year: 2000
 content: ...
 ```
 
-#### 자동 호출 조건
-
-아래 표현이 질문에 포함되면 모델 판단과 별개로 보조 실행될 수 있습니다.
-
-- `근처`
-- `주변`
-- `인근`
-- `지역`
-- `병원`
-- `의원`
-- `응급실`
-
 #### 주로 호출되는 질문 유형
 
 - `서울 근처 병원 정보도 같이 알려줘`
@@ -102,8 +90,8 @@ content: ...
 
 ### 3. `symptom_duration_parser`
 
-- 목적: 사용자 질문에서 증상과 지속 기간 표현을 추출해 구조화합니다.
-- 구현 위치: [`search_agent.py`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/agents/search_agent.py)
+- 목적: 사용자 질문에서 지속 기간 표현을 추출해 구조화합니다.
+- 구현 위치: [`medical_tools.py`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/tools/medical_tools.py)
 
 #### 입력
 
@@ -116,9 +104,8 @@ content: ...
 #### 동작
 
 - 검색을 수행하지 않습니다.
-- 정규식과 키워드 기반으로 질문 안의 기간 표현을 추출합니다.
-- 증상 키워드를 함께 찾아 `[증상 지속기간 분석]` 블록으로 만듭니다.
-- 최종 답변에서 기간 정보를 명확히 반영하도록 프롬프트에 전달합니다.
+- 정규식 기반으로 질문 안의 기간 표현을 추출합니다.
+- `[지속기간 분석]` 블록으로 변환한 뒤 최종 답변 단계에 전달합니다.
 
 #### 추출 대상 예시
 
@@ -131,39 +118,14 @@ content: ...
   - `몇 달`
   - `계속`
   - `오래 지속`
-- 증상 표현
-  - `기침`
-  - `발열`
-  - `가래`
-  - `호흡곤란`
-  - `두통`
-  - `복통`
-  - `인후통`
-  - `체중감소`
 
 #### 출력 예시
 
 ```text
-[증상 지속기간 분석]
+[지속기간 분석]
 원문 질문: 기침이 3주째 계속되는데 결핵일 수 있어?
-추출된 증상: 기침
 추출된 지속기간: 3주째, 계속
 ```
-
-#### 자동 호출 조건
-
-아래 표현이 질문에 포함되면 모델 판단과 별개로 보조 실행될 수 있습니다.
-
-- `지속`
-- `계속`
-- `며칠`
-- `몇일`
-- `몇 주`
-- `몇달`
-- `주째`
-- `일째`
-- `달째`
-- `오래`
 
 #### 주로 호출되는 질문 유형
 
@@ -171,13 +133,48 @@ content: ...
 - `열이 며칠째 안 떨어져`
 - `가래가 오래 지속돼`
 
+### 4. `symptom_parser`
+
+- 목적: 사용자 질문에서 증상 표현을 추출해 구조화합니다.
+- 구현 위치: [`medical_tools.py`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/tools/medical_tools.py)
+
+#### 입력
+
+```json
+{
+  "query": "신대방삼거리 근처인데 세시간째 이가 아파"
+}
+```
+
+#### 동작
+
+- 검색을 수행하지 않습니다.
+- 모듈 내부의 증상 표현 사전을 기준으로 질문에서 증상을 추출합니다.
+- `이가 아파`, `이가 아프`, `치통` 같은 표현은 `치통`으로 정규화합니다.
+- `[증상 분석]` 블록으로 변환한 뒤 최종 답변 단계에 전달합니다.
+
+#### 출력 예시
+
+```text
+[증상 분석]
+원문 질문: 신대방삼거리 근처인데 세시간째 이가 아파
+추출된 증상: 치통
+```
+
+#### 주로 호출되는 질문 유형
+
+- `기침이 나`
+- `치통이 심해`
+- `배가 아파`
+
 ## Tool Selection Rules
 
-현재 도구 선택 규칙은 [`app/agents/prompts.py`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/agents/prompts.py)에 정의되어 있습니다.
+현재 도구 선택 규칙은 [`app/agents/prompts.py`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/agents/prompts.py)에 정의되어 있으며, 실제 선택은 LLM이 수행합니다.
 
 - 일반 설명형 질문: `medical_search`
-- 지역/병원 관련 질문: `hospital_search` 추가
-- 증상 지속기간 질문: `symptom_duration_parser` 추가
+- 지역/병원 관련 질문: `hospital_search`
+- 증상 질문: `symptom_parser`
+- 증상 지속기간 질문: `symptom_duration_parser`
 - 복합 질문: 여러 tool을 함께 사용할 수 있음
 
 예시:
@@ -186,10 +183,12 @@ content: ...
   - `medical_search`
 - `서울 근처 결핵 병원 정보도 같이 알려줘`
   - `medical_search`, `hospital_search`
+- `신대방삼거리 근처인데 세시간째 이가 아파`
+  - `hospital_search`, `symptom_parser`, `symptom_duration_parser`
 - `기침이 3주째인데 결핵일 수 있어?`
-  - `medical_search`, `symptom_duration_parser`
+  - `medical_search`, `symptom_parser`, `symptom_duration_parser`
 - `서울 근처에서 기침이 3주째 지속되는데 어디를 봐야 해?`
-  - `medical_search`, `hospital_search`, `symptom_duration_parser`
+  - `medical_search`, `hospital_search`, `symptom_parser`, `symptom_duration_parser`
 
 ## Data Source
 
@@ -219,5 +218,6 @@ content: ...
 
 - `hospital_search`는 별도 병원 DB가 아니라 `edu-collection`의 텍스트 문맥을 다시 검색하는 방식입니다.
 - 실제 거리 계산, 좌표 기반 근접 검색, 지도 검색은 지원하지 않습니다.
-- `symptom_duration_parser`는 규칙 기반 추출이므로 문장 변형이 심하면 일부 표현을 놓칠 수 있습니다.
+- `symptom_duration_parser`는 정규식 기반 추출이므로 복합 자연어 표현은 일부 놓칠 수 있습니다.
+- `symptom_parser`는 사전 기반 추출이므로 등록되지 않은 표현은 놓칠 수 있습니다.
 - 의료 조언은 검색 문맥 기반 요약이며, 진단을 대체하지 않습니다.
