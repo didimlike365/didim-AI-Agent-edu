@@ -3,6 +3,8 @@
 
 FastAPI 기반의 LangChain v1.0 에이전트 교육용 템플릿입니다.
 
+현재 구현은 LangChain tool-calling 기반으로 동작하며, Elasticsearch의 `edu-collection` 인덱스를 조회해 의료 문맥을 검색합니다.
+
 ## 기술 스택
 
 - FastAPI
@@ -10,6 +12,18 @@ FastAPI 기반의 LangChain v1.0 에이전트 교육용 템플릿입니다.
 - OpenAI
 - Elasticsearch
 - uv
+
+## 현재 구조
+
+- Agent orchestration: [`app/agents/search_agent.py`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/agents/search_agent.py)
+- Tool definitions: [`app/tools/medical_tools.py`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/tools/medical_tools.py)
+- Elasticsearch access: [`app/services/elasticsearch_service.py`](/Users/leeyongpil/working/AI-Agent/Agent-Devlop/agent/app/services/elasticsearch_service.py)
+
+현재 tool 목록:
+- `medical_search`
+- `hospital_search`
+- `symptom_parser`
+- `symptom_duration_parser`
 
 ## 환경 준비 및 설치 가이드
 
@@ -51,6 +65,7 @@ agent/
 │   ├── core/
 │   ├── models/
 │   ├── services/
+│   ├── tools/
 │   ├── utils/
 │   └── main.py
 ├── docs/
