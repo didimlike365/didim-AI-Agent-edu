@@ -1,35 +1,23 @@
-import re
 from typing import Any
 
+from langchain_openai import ChatOpenAI
 from langchain_core.tools import BaseTool, tool
+from pydantic import BaseModel, Field
 
+from app.core.config import settings
 from app.services.elasticsearch_service import ElasticsearchService
 
 
-SYMPTOM_TERMS = (
-    "기침",
-    "발열",
-    "열",
-    "가래",
-    "호흡곤란",
-    "두통",
-    "복통",
-    "인후통",
-    "콧물",
-    "오한",
-    "흉통",
-    "설사",
-    "구토",
-    "피로",
-    "체중감소",
-    "치통",
-    "이가 아파",
-    "이가 아프",
-    "목이 아파",
-    "배가 아파",
-)
-
 _search_service: ElasticsearchService | None = None
+_tool_llm: ChatOpenAI | None = None
+
+
+class SymptomExtraction(BaseModel):
+    symptoms: list[str] = Field(default_factory=list, description="질문에서 파악한 증상 목록")
+
+
+class DurationExtraction(BaseModel):
+    durations: list[str] = Field(default_factory=list, description="질문에서 파악한 지속 기간 표현 목록")
 
 
 def configure_medical_tools(search_service: ElasticsearchService) -> None:
@@ -46,6 +34,17 @@ def _get_search_service() -> ElasticsearchService:
     if _search_service is None:
         raise RuntimeError("ElasticsearchService is not configured for medical tools.")
     return _search_service
+
+
+def _get_tool_llm() -> ChatOpenAI:
+    global _tool_llm
+    if _tool_llm is None:
+        _tool_llm = ChatOpenAI(
+            model=settings.OPENAI_MODEL,
+            api_key=settings.OPENAI_API_KEY,
+            temperature=0,
+        )
+    return _tool_llm
 
 
 @tool
@@ -67,15 +66,15 @@ async def hospital_search(query: str, region: str = "") -> str:
 
 
 @tool
-def symptom_duration_parser(query: str) -> str:
+async def symptom_duration_parser(query: str) -> str:
     """질문에서 지속 기간 정보를 추출해 구조화합니다."""
-    return format_symptom_duration(parse_symptom_duration(query))
+    return format_symptom_duration(await parse_symptom_duration(query))
 
 
 @tool
-def symptom_parser(query: str) -> str:
+async def symptom_parser(query: str) -> str:
     """질문에서 증상 표현을 추출해 구조화합니다."""
-    return format_symptoms(parse_symptoms(query))
+    return format_symptoms(await parse_symptoms(query))
 
 
 def build_location_query(query: str, region: str = "") -> str:
@@ -86,27 +85,22 @@ def build_location_query(query: str, region: str = "") -> str:
     return " ".join(part for part in parts if part)
 
 
-def parse_symptom_duration(question: str) -> dict[str, Any]:
-    duration_patterns = [
-        r"(\d+\s*시간(?:째)?)",
-        r"(\d+\s*일(?:째)?)",
-        r"(\d+\s*주(?:째)?)",
-        r"(\d+\s*달(?:째)?)",
-        r"(\d+\s*개월(?:째)?)",
-        r"(며칠(?:째)?)",
-        r"(몇\s*주(?:째)?)",
-        r"(몇\s*달(?:째)?)",
-        r"(오래\s*지속)",
-        r"(계속)",
-    ]
-    duration_matches: list[str] = []
-    for pattern in duration_patterns:
-        duration_matches.extend(match.strip() for match in re.findall(pattern, question))
-
+async def parse_symptom_duration(question: str) -> dict[str, Any]:
+    extractor = _get_tool_llm().with_structured_output(DurationExtraction)
+    result = await extractor.ainvoke(
+        [
+            (
+                "system",
+                "사용자 질문에서 지속 기간 표현만 추출하라. 없으면 빈 리스트를 반환하라. "
+                "의미를 보존한 원문 표현을 최대한 유지하라.",
+            ),
+            ("human", question),
+        ]
+    )
     return {
         "question": question,
-        "durations": duration_matches,
-        "has_duration_context": bool(duration_matches),
+        "durations": result.durations,
+        "has_duration_context": bool(result.durations),
     }
 
 
@@ -121,18 +115,22 @@ def format_symptom_duration(parsed: dict[str, Any]) -> str:
     )
 
 
-def parse_symptoms(question: str) -> dict[str, Any]:
-    matched_terms = [term for term in SYMPTOM_TERMS if term in question]
-    normalized_symptoms: list[str] = []
-    for term in matched_terms:
-        normalized = normalize_symptom(term)
-        if normalized not in normalized_symptoms:
-            normalized_symptoms.append(normalized)
-
+async def parse_symptoms(question: str) -> dict[str, Any]:
+    extractor = _get_tool_llm().with_structured_output(SymptomExtraction)
+    result = await extractor.ainvoke(
+        [
+            (
+                "system",
+                "사용자 질문에서 증상 표현만 추출하라. 없으면 빈 리스트를 반환하라. "
+                "동의어는 대표 증상명으로 정규화하라. 예: '이가 아파'는 '치통'.",
+            ),
+            ("human", question),
+        ]
+    )
     return {
         "question": question,
-        "symptoms": normalized_symptoms,
-        "has_symptom_context": bool(normalized_symptoms),
+        "symptoms": result.symptoms,
+        "has_symptom_context": bool(result.symptoms),
     }
 
 
@@ -197,12 +195,3 @@ def build_sources(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
     return sources
 
-
-def normalize_symptom(term: str) -> str:
-    if term in ("이가 아파", "이가 아프", "치통"):
-        return "치통"
-    if term == "목이 아파":
-        return "인후통"
-    if term == "배가 아파":
-        return "복통"
-    return term
