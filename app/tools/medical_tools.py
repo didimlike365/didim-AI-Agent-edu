@@ -58,8 +58,9 @@ async def medical_search(query: str) -> str:
 
 @tool
 async def hospital_search(query: str, region: str = "") -> str:
-    """같은 edu-collection 인덱스에서 지역과 병원 관련 문맥을 우선 검색합니다."""
-    documents = await _get_search_service().search(build_location_query(query=query, region=region))
+    """같은 edu-collection 인덱스에서 LLM이 전달한 지역/병원 관련 질의로 문맥을 검색합니다."""
+    search_query = " ".join(part for part in [query, region] if part)
+    documents = await _get_search_service().search(search_query or query)
     if not documents:
         return "지역 또는 병원 관련 검색 결과가 없습니다."
     return build_hospital_context(documents)
@@ -75,14 +76,6 @@ async def symptom_duration_parser(query: str) -> str:
 async def symptom_parser(query: str) -> str:
     """질문에서 증상 표현을 추출해 구조화합니다."""
     return format_symptoms(await parse_symptoms(query))
-
-
-def build_location_query(query: str, region: str = "") -> str:
-    parts = [query]
-    if region:
-        parts.append(region)
-    parts.extend(["병원", "의료기관", "위치", "지역"])
-    return " ".join(part for part in parts if part)
 
 
 async def parse_symptom_duration(question: str) -> dict[str, Any]:
@@ -194,4 +187,3 @@ def build_sources(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return sources
-

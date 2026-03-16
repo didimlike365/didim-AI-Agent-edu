@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from app.agents.prompts import system_prompt
 from app.core.config import settings
 from app.services.elasticsearch_service import ElasticsearchService
-from app.tools.medical_tools import build_location_query, build_sources, get_medical_tools
+from app.tools.medical_tools import build_sources, get_medical_tools
 
 
 class SearchMessage(BaseModel):
@@ -118,12 +118,10 @@ class Agent:
             documents = await self.search_service.search(args.get("query", question))
             return build_sources(documents)
         if tool_name == "hospital_search":
-            documents = await self.search_service.search(
-                build_location_query(
-                    query=args.get("query", question),
-                    region=args.get("region", ""),
-                )
+            search_query = " ".join(
+                part for part in [args.get("query", question), args.get("region", "")] if part
             )
+            documents = await self.search_service.search(search_query or question)
             return build_sources(documents)
         return []
 
