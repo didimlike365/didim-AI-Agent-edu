@@ -33,7 +33,7 @@ class Agent:
         if messages:
             question = getattr(messages[-1], "content", str(messages[-1]))
 
-        answer, metadata = await self._run_agent(question)
+        answer, metadata = await self._run_agent(question, config=config)
         message = SearchMessage(
             tool_calls=[
                 {
@@ -53,13 +53,14 @@ class Agent:
             }
         }
 
-    async def _run_agent(self, question: str) -> tuple[str, dict[str, Any]]:
+    async def _run_agent(self, question: str, config: dict | None = None) -> tuple[str, dict[str, Any]]:
         initial_messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=question),
         ]
+        invoke_config = self._build_invoke_config(config)
 
-        agent_message = await self.tool_llm.ainvoke(initial_messages)
+        agent_message = await self.tool_llm.ainvoke(initial_messages, config=invoke_config)
         tool_calls = list(getattr(agent_message, "tool_calls", []) or [])
 
         if not tool_calls:
@@ -78,6 +79,7 @@ class Agent:
                 tool_name=tool_name,
                 args=tool_call.get("args", {}),
                 question=question,
+                config=invoke_config,
             )
             sources.extend(await self._collect_sources(tool_name, tool_call.get("args", {}), question))
             tool_messages.append(
@@ -88,13 +90,19 @@ class Agent:
             )
 
         final_messages = initial_messages + [agent_message] + tool_messages
-        final_response = await self.llm.ainvoke(final_messages)
+        final_response = await self.llm.ainvoke(final_messages, config=invoke_config)
         answer = final_response.content if hasattr(final_response, "content") else str(final_response)
         answer = self._append_used_tools(answer, used_tools)
         metadata = {"sources": sources, "used_tools": used_tools}
         return answer, metadata
 
-    async def _execute_tool(self, tool_name: str, args: dict[str, Any], question: str) -> str:
+    async def _execute_tool(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        question: str,
+        config: dict[str, Any] | None = None,
+    ) -> str:
         tool = self.tools_by_name.get(tool_name)
         if tool is None:
             return "지원하지 않는 도구입니다."
@@ -110,7 +118,7 @@ class Agent:
         elif tool_name == "symptom_duration_parser":
             tool_args.setdefault("query", question)
 
-        raw_result = await tool.ainvoke(tool_args)
+        raw_result = await tool.ainvoke(tool_args, config=config)
         return raw_result if isinstance(raw_result, str) else str(raw_result)
 
     async def _collect_sources(self, tool_name: str, args: dict[str, str], question: str) -> list[dict[str, Any]]:
@@ -133,3 +141,24 @@ class Agent:
         for tool_name in used_tools:
             lines.append(f"- {tool_name}")
         return f"{answer}\n" + "\n".join(lines)
+
+    def _build_invoke_config(self, config: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not config:
+            return None
+
+        invoke_config: dict[str, Any] = {}
+        callbacks = config.get("callbacks")
+        tags = config.get("tags")
+        metadata = config.get("metadata")
+        configurable = config.get("configurable")
+
+        if callbacks:
+            invoke_config["callbacks"] = callbacks
+        if tags:
+            invoke_config["tags"] = tags
+        if metadata:
+            invoke_config["metadata"] = metadata
+        if configurable:
+            invoke_config["configurable"] = configurable
+
+        return invoke_config or None

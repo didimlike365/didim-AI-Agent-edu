@@ -1,5 +1,6 @@
 from typing import Any
 
+from opik import start_as_current_span
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
@@ -47,35 +48,65 @@ def _get_tool_llm() -> ChatOpenAI:
     return _tool_llm
 
 
+def _get_opik_project_name() -> str | None:
+    if settings.OPIK is None:
+        return None
+    return settings.OPIK.PROJECT
+
+
 @tool
 async def medical_search(query: str) -> str:
     """의학 문서 인덱스에서 질병, 진단, 치료 등 설명형 정보를 검색합니다."""
-    documents = await _get_search_service().search(query)
-    if not documents:
-        return "의학 지식 검색 결과가 없습니다."
-    return build_medical_context(documents)
+    with start_as_current_span(
+        name="medical_search",
+        type="tool",
+        input={"query": query},
+        project_name=_get_opik_project_name(),
+    ):
+        documents = await _get_search_service().search(query)
+        if not documents:
+            return "의학 지식 검색 결과가 없습니다."
+        return build_medical_context(documents)
 
 
 @tool
 async def hospital_search(query: str, region: str = "") -> str:
     """같은 edu-collection 인덱스에서 LLM이 전달한 지역/병원 관련 질의로 문맥을 검색합니다."""
-    search_query = " ".join(part for part in [query, region] if part)
-    documents = await _get_search_service().search(search_query or query)
-    if not documents:
-        return "지역 또는 병원 관련 검색 결과가 없습니다."
-    return build_hospital_context(documents)
+    with start_as_current_span(
+        name="hospital_search",
+        type="tool",
+        input={"query": query, "region": region},
+        project_name=_get_opik_project_name(),
+    ):
+        search_query = " ".join(part for part in [query, region] if part)
+        documents = await _get_search_service().search(search_query or query)
+        if not documents:
+            return "지역 또는 병원 관련 검색 결과가 없습니다."
+        return build_hospital_context(documents)
 
 
 @tool
 async def symptom_duration_parser(query: str) -> str:
     """질문에서 지속 기간 정보를 추출해 구조화합니다."""
-    return format_symptom_duration(await parse_symptom_duration(query))
+    with start_as_current_span(
+        name="symptom_duration_parser",
+        type="tool",
+        input={"query": query},
+        project_name=_get_opik_project_name(),
+    ):
+        return format_symptom_duration(await parse_symptom_duration(query))
 
 
 @tool
 async def symptom_parser(query: str) -> str:
     """질문에서 증상 표현을 추출해 구조화합니다."""
-    return format_symptoms(await parse_symptoms(query))
+    with start_as_current_span(
+        name="symptom_parser",
+        type="tool",
+        input={"query": query},
+        project_name=_get_opik_project_name(),
+    ):
+        return format_symptoms(await parse_symptoms(query))
 
 
 async def parse_symptom_duration(question: str) -> dict[str, Any]:

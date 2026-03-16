@@ -5,11 +5,11 @@ from pydantic import Field
 class OpikSettings(BaseSettings):
     """Opik configuration."""
 
-    URL_OVERRIDE: str | None = Field(default=None, description="Opik base URL")
+    URL_OVERRIDE: str | None = Field(default="https://opik-edu.didim365.app", description="Opik base URL")
     # Optional if you are using Opik Cloud:
     API_KEY: str | None = Field(default=None, description="opik cloud api key here")
     WORKSPACE: str | None = Field(default=None, description="your workspace name")
-    PROJECT: str | None = Field(default=None, description="your project name")
+    PROJECT: str | None = Field(default="didim-ai-agent-edu-lyp", description="your project name")
 
 
 class Settings(BaseSettings):

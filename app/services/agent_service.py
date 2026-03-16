@@ -2,9 +2,14 @@ import asyncio
 import contextlib
 from datetime import datetime
 import json
+import os
 from typing import Optional
 import uuid
 
+from opik import Opik
+from opik.integrations.langchain import OpikTracer
+
+from app.core.config import settings
 from app.utils.logger import log_execution, custom_logger
 
 from langchain_core.messages import HumanMessage
@@ -16,6 +21,47 @@ class AgentService:
         # IMP: LangChain을 통해 사용할 LLM(OpenAI) 객체 초기화 구현. 에이전트의 두뇌 역할을 합니다.
         self.agent = None
         self.progress_queue: asyncio.Queue = asyncio.Queue()
+        self.opik_client = self._create_opik_client()
+
+    def _create_opik_client(self) -> Opik | None:
+        if settings.OPIK is None:
+            return None
+
+        if settings.OPIK.URL_OVERRIDE:
+            os.environ["OPIK_URL_OVERRIDE"] = settings.OPIK.URL_OVERRIDE
+        if settings.OPIK.PROJECT:
+            os.environ["OPIK_PROJECT_NAME"] = settings.OPIK.PROJECT
+        if settings.OPIK.WORKSPACE:
+            os.environ["OPIK_WORKSPACE"] = settings.OPIK.WORKSPACE
+        if settings.OPIK.API_KEY:
+            os.environ["OPIK_API_KEY"] = settings.OPIK.API_KEY
+
+        try:
+            return Opik(
+                project_name=settings.OPIK.PROJECT,
+                workspace=settings.OPIK.WORKSPACE,
+                host=settings.OPIK.URL_OVERRIDE,
+                api_key=settings.OPIK.API_KEY,
+                _show_misconfiguration_message=False,
+            )
+        except Exception as exc:
+            custom_logger.warning(f"Failed to initialize Opik client: {exc}")
+            return None
+
+    def _create_opik_tracer(self, thread_id: uuid.UUID) -> OpikTracer | None:
+        if self.opik_client is None or settings.OPIK is None:
+            return None
+
+        try:
+            return OpikTracer(
+                project_name=settings.OPIK.PROJECT,
+                thread_id=str(thread_id),
+                metadata={"thread_id": str(thread_id), "component": "agent_service"},
+                tags=["agent-service", "chat"],
+            )
+        except Exception as exc:
+            custom_logger.warning(f"Failed to initialize Opik tracer: {exc}")
+            return None
 
     def _create_agent(self, thread_id: uuid.UUID = None):
         """LangChain 에이전트 생성"""
@@ -34,12 +80,16 @@ class AgentService:
             self._create_agent(thread_id=thread_id)
 
             custom_logger.info(f"사용자 메시지: {user_messages}")
+            opik_tracer = self._create_opik_tracer(thread_id)
+            invoke_config = {"configurable": {"thread_id": str(thread_id)}}
+            if opik_tracer is not None:
+                invoke_config["callbacks"] = [opik_tracer]
 
             # IMP: LangGraph 에이전트에 사용자의 메시지를 HumanMessage 형태로 전달하고, 
             # thread_id를 통해 대화 문맥(Context)을 유지하며 비동기 스트리밍(astream)으로 실행하는 구현.
             agent_stream = self.agent.astream(
                 {"messages": [HumanMessage(content=user_messages)]},
-                config={"configurable": {"thread_id": str(thread_id)}},
+                config=invoke_config,
                 stream_mode="updates",
             )
 
