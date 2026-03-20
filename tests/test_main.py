@@ -20,4 +20,6 @@ def test_health_endpoint(client: TestClient):
     data = response.json()
     assert "status" in data
     assert data["status"] == "healthy"
-
+    assert "opik" in data
+    assert "enabled" in data["opik"]
+    assert "dataset_connected" in data["opik"]

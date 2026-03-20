@@ -5,6 +5,8 @@ FastAPI 기반의 LangChain v1.0 에이전트 교육용 템플릿입니다.
 
 현재 구현은 LangChain tool-calling 기반으로 동작하며, Elasticsearch의 `edu-collection` 인덱스를 조회해 의료 문맥을 검색합니다.
 
+검색 결과는 메인 답변 LLM으로 전달되기 전에 별도 압축 레이어를 거칩니다. 이 단계에서는 `gpt-4.1-nano` 같은 저비용 모델로 핵심 포인트만 정리해 전체 토큰 사용량을 줄일 수 있습니다.
+
 ## 기술 스택
 
 - FastAPI
@@ -48,6 +50,16 @@ cp env.sample .env
 ```
 
 `.env`에 OpenAI, Elasticsearch 접속 정보를 채웁니다.
+
+검색 컨텍스트 압축에 사용할 모델도 함께 조정할 수 있습니다.
+
+```env
+SEARCH_SUMMARIZER_MODEL=gpt-4.1-nano
+SEARCH_SUMMARIZER_ENABLED=true
+SEARCH_SUMMARIZER_MAX_DOCS=3
+SEARCH_SUMMARIZER_MAX_CHARS_PER_DOC=800
+SEARCH_SUMMARIZER_MAX_OUTPUT_TOKENS=350
+```
 
 ### 4. 개발 서버 실행
 

@@ -10,6 +10,9 @@ from opik import Opik
 from opik.integrations.langchain import OpikTracer
 
 from app.core.config import settings
+from app.services.opik_dataset_service import OpikDatasetBinding, OpikDatasetService
+from app.services.triage_state_service import triage_state_service
+from app.tools.medical_tools import resolve_emergency_follow_up
 from app.utils.logger import log_execution, custom_logger
 
 from langchain_core.messages import HumanMessage
@@ -22,6 +25,7 @@ class AgentService:
         self.agent = None
         self.progress_queue: asyncio.Queue = asyncio.Queue()
         self.opik_client = self._create_opik_client()
+        self.opik_dataset = self._connect_opik_dataset()
 
     def _create_opik_client(self) -> Opik | None:
         if settings.OPIK is None:
@@ -53,15 +57,46 @@ class AgentService:
             return None
 
         try:
+            metadata = {"thread_id": str(thread_id), "component": "agent_service"}
+            if self.opik_dataset is not None and self.opik_dataset.connected:
+                metadata["dataset_name"] = self.opik_dataset.name
+                if self.opik_dataset.dataset_id is not None:
+                    metadata["dataset_id"] = self.opik_dataset.dataset_id
+
             return OpikTracer(
                 project_name=settings.OPIK.PROJECT,
                 thread_id=str(thread_id),
-                metadata={"thread_id": str(thread_id), "component": "agent_service"},
+                metadata=metadata,
                 tags=["agent-service", "chat"],
             )
         except Exception as exc:
             custom_logger.warning(f"Failed to initialize Opik tracer: {exc}")
             return None
+
+    def _connect_opik_dataset(self) -> OpikDatasetBinding | None:
+        if self.opik_client is None or settings.OPIK is None:
+            return None
+
+        dataset_service = OpikDatasetService(
+            client=self.opik_client,
+            dataset_name=settings.OPIK.DATASET,
+        )
+        return dataset_service.connect()
+
+    def get_opik_status(self) -> dict[str, object]:
+        dataset_name = settings.OPIK.DATASET if settings.OPIK is not None else None
+        status: dict[str, object] = {
+            "enabled": settings.OPIK is not None,
+            "client_initialized": self.opik_client is not None,
+            "project": settings.OPIK.PROJECT if settings.OPIK is not None else None,
+            "workspace": settings.OPIK.WORKSPACE if settings.OPIK is not None else None,
+            "dataset_name": dataset_name,
+            "dataset_configured": bool(dataset_name),
+            "dataset_connected": bool(self.opik_dataset and self.opik_dataset.connected),
+            "dataset_id": self.opik_dataset.dataset_id if self.opik_dataset else None,
+            "dataset_error": self.opik_dataset.error if self.opik_dataset else None,
+        }
+        return status
 
     def _create_agent(self, thread_id: uuid.UUID = None):
         """LangChain 에이전트 생성"""
@@ -79,11 +114,50 @@ class AgentService:
             # 에이전트 초기화 (한 번만)
             self._create_agent(thread_id=thread_id)
 
+            thread_key = str(thread_id)
+            pending_triage = triage_state_service.get(thread_key)
             custom_logger.info(f"사용자 메시지: {user_messages}")
             opik_tracer = self._create_opik_tracer(thread_id)
             invoke_config = {"configurable": {"thread_id": str(thread_id)}}
+            invoke_metadata: dict[str, object] = {}
+
+            if pending_triage:
+                resolution = resolve_emergency_follow_up(
+                    original_question=pending_triage.get("original_question", ""),
+                    follow_up=user_messages,
+                )
+                triage_state_service.clear(thread_key)
+
+                if resolution.should_seek_emergency_care:
+                    response = {
+                        "step": "done",
+                        "message_id": str(uuid.uuid4()),
+                        "role": "assistant",
+                        "content": resolution.message,
+                        "metadata": {
+                            "used_tools": ["emergency_symptom_triage"],
+                            "triage": {
+                                "pending": False,
+                                "resolved": True,
+                                "reason": resolution.reason,
+                            },
+                        },
+                        "created_at": datetime.utcnow().isoformat(),
+                    }
+                    yield json.dumps(response, ensure_ascii=False)
+                    return
+
+                user_messages = (
+                    f"초기 질문: {pending_triage.get('original_question', '')}\n"
+                    f"추가 답변: {user_messages}"
+                )
+                invoke_metadata["skip_emergency_triage"] = True
+                invoke_metadata["triage_follow_up"] = True
+
             if opik_tracer is not None:
                 invoke_config["callbacks"] = [opik_tracer]
+            if invoke_metadata:
+                invoke_config["metadata"] = invoke_metadata
 
             # IMP: LangGraph 에이전트에 사용자의 메시지를 HumanMessage 형태로 전달하고, 
             # thread_id를 통해 대화 문맥(Context)을 유지하며 비동기 스트리밍(astream)으로 실행하는 구현.
@@ -158,6 +232,14 @@ class AgentService:
                                 if tool.get("name") == "ChatResponse":
                                     args = tool.get("args", {})
                                     metadata = args.get("metadata")
+                                    triage = metadata.get("triage") if isinstance(metadata, dict) else None
+                                    if isinstance(triage, dict) and triage.get("pending"):
+                                        triage_state_service.set(
+                                            thread_key,
+                                            {"original_question": triage.get("original_question", user_messages)},
+                                        )
+                                    elif pending_triage:
+                                        triage_state_service.clear(thread_key)
                                     custom_logger.info("========================================")
                                     custom_logger.info(args)
                                     yield f'{{"step": "done", "message_id": {json.dumps(args.get("message_id"))}, "role": "assistant", "content": {json.dumps(args.get("content"), ensure_ascii=False)}, "metadata": {json.dumps(self._handle_metadata(metadata), ensure_ascii=False)}, "created_at": "{datetime.utcnow().isoformat()}"}}'

@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.routes.threads import threads_router
 from app.api.routes.chat import chat_router
+from app.services.agent_service import AgentService
 from app.utils.logger import custom_logger
 
 app = FastAPI(
@@ -31,6 +32,14 @@ api_router.include_router(chat_router, tags=["chat"])
 app.include_router(api_router)
 
 
+@app.on_event("startup")
+async def initialize_observability():
+    agent_service = AgentService()
+    opik_status = agent_service.get_opik_status()
+    app.state.opik_status = opik_status
+    custom_logger.info("Opik startup status: %s", opik_status)
+
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     custom_logger.info(f"➡️ 요청 시작: {request.method} {request.url.path}")
@@ -55,7 +64,13 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy"}
+    opik_status = getattr(app.state, "opik_status", None)
+    if opik_status is None:
+        opik_status = AgentService().get_opik_status()
+    return {
+        "status": "healthy",
+        "opik": opik_status,
+    }
 
 
 if __name__ == "__main__":
